@@ -30,10 +30,6 @@ def get_login_redirect_link(auth_client):
     """
     """
 
-async def pika_poller():
-    """
-    """
-
 def format_mail_message():
     """
     """

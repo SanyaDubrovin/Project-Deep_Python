@@ -1,6 +1,20 @@
+import aiohttp
+
 from OpenSSL import crypto
 from socket import gethostname
 
+
+def consume_pika_query(channel, queue_name, callback):
+    channel.basic_consume(queue=queue_name, on_message_callback=callback, auto_ack=True)
+    channel.start_consuming()
+    return
+
+async def fetch(session: aiohttp.ClientSession, url: str):
+    """
+    Sends a HTTP request to get some content (used to collect Google auth endpoints urls)
+    """
+    async with session.get(url) as response:
+        return await response.text()
 
 def generate_self_signed_cert():
     # Create a key pair

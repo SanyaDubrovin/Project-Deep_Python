@@ -94,6 +94,11 @@ async def send_message(chat_id: str, message: str):
     TELEGRAM_BOT.send_message(chat_id, message)
     return
 
+def run_messages_poller():
+    pass
+
+
+
 def get_auth_client():
     return WebApplicationClient(CONFIG['GOOGLE_CLIENT_ID'])
 
@@ -120,7 +125,7 @@ def format_hello_message(message: types.Message):
     """
     message = as_list(
         Text('Hi, ', Bold(message.from_user.first_name), '!'),
-        'I am a bot to help you filter emails.',
+        'I am a bot to help you filter emails.' + str(message.chat.id),
         as_marked_section(
             'I am able to manage these domains:',
             '@gmail.com',
@@ -207,16 +212,54 @@ async def main() -> None:
             redirect_uri=CALLBACK_URL
         )
 
-if __name__ == "__main__":
+async def message_callback(bot, message, chat_id_to_send):
+    await bot.send_message(chat_id_to_send, message)
+    #await bot.session.close()
+
+async def run_consumers(bot, chat_id_to_send):
+    loop = asyncio.get_event_loop()
+    def on_message(ch, method, properties, body):
+        future = asyncio.run_coroutine_threadsafe(message_callback(bot, body.decode(), chat_id_to_send), loop)
+        return future.result()
+    
+    connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
+    consume_channel = connection.channel()
+    consume_channel.queue_declare(queue='messages_to_tg')
+    consume_channel.basic_consume(queue='messages_to_tg', on_message_callback=on_message, auto_ack=True)
+    loop = asyncio.get_event_loop()
     try:
-        DATABASE_CONNECTION = get_db(check_same_thread=False)
-    except sqlite3.OperationalError:
-        pass
-    USERS_DICT = DATABASE_CONNECTION.get_all_users()
+        await loop.run_in_executor(None, consume_channel.start_consuming)
+    except Exception as exc:
+        print('Error while consuming', exc)
+    finally:
+        connection.close()
+
+def run_sender():
+    chat_id_to_send = 1001182656
+    bot = Bot(
+        default=DefaultBotProperties(
+            parse_mode=ParseMode.HTML
+        ),
+        token=CONFIG['TOKEN']
+    )
+    asyncio.run(run_consumers(bot, chat_id_to_send))
+    bot.session.close()
+
+
+
+if __name__ == "__main__":
+#    try:
+#        DATABASE_CONNECTION = get_db(check_same_thread=False)
+#    except sqlite3.OperationalError:
+#        pass
+#    USERS_DICT = DATABASE_CONNECTION.get_all_users()
     PIKA_EMAILS_LOCK = Lock()
     PIKA_EMAILS_REGISTERED = set()
-    PIKA_CONSUME_CHANNEL, PIKA_REGISTER_CHANNEL = init_rabbitmq_connection()
-    PIKA_CONSUMER_THREAD = Thread(target=consume_pika_query, args=(PIKA_CONSUME_CHANNEL, 'vika_notify', pika_user_register_callback))
-    PIKA_CONSUMER_THREAD.start()
-    asyncio.run(main())
-    PIKA_CONSUMER_THREAD.join()
+#    PIKA_CONSUME_CHANNEL, PIKA_REGISTER_CHANNEL = init_rabbitmq_connection()
+#    PIKA_CONSUMER_THREAD = Thread(target=consume_pika_query, args=(PIKA_CONSUME_CHANNEL, 'vika_notify', pika_user_register_callback))
+#    PIKA_CONSUMER_THREAD.start()
+    thread = Thread(target=run_sender)
+    thread.start()
+    #asyncio.run(main())
+    thread.join()
+#    PIKA_CONSUMER_THREAD.join()

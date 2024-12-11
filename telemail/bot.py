@@ -32,12 +32,7 @@ class SupportedEmails(Enum):
     gmail = 'gmail.com'
 
 dp = Dispatcher()
-TELEGRAM_BOT = Bot(
-    default=DefaultBotProperties(
-        parse_mode=ParseMode.HTML
-    ),
-    token=CONFIG['TOKEN']
-)
+
 
 
 """
@@ -63,41 +58,6 @@ User:
 - full_name (first_name + last_name, если есть)
 - url (ссылка на юзера)
 """
-
-def init_rabbitmq_connection() -> None:
-    connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
-    send_channel = connection.channel()
-    send_channel.queue_declare(queue='vika_register')
-
-    consume_channel = connection.channel()
-    consume_channel.queue_declare(queue='vika_notify')
-    return consume_channel, send_channel
-
-def consume_pika_query(channel, queue_name, callback):
-    connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
-    consume_channel = connection.channel()
-    consume_channel.queue_declare(queue=queue_name)
-    consume_channel.basic_consume(queue=queue_name, on_message_callback=callback, auto_ack=True)
-    consume_channel.start_consuming()
-    return
-
-def pika_user_register_callback(ch, method, properties, body):
-    email, message = body.decode().split('\t')
-    # update dict of users
-    new_user = DATABASE_CONNECTION.get_user_by_email(email)
-    USERS_DICT.update(new_user)
-    asyncio.run(send_message(new_user[email]['chat_id'], message))
-    # loop = asyncio.get_event_loop()
-    # loop.run_until_complete(send_message(new_user[email]['chat_id'], message))
-
-async def send_message(chat_id: str, message: str):
-    TELEGRAM_BOT.send_message(chat_id, message)
-    return
-
-def run_messages_poller():
-    pass
-
-
 
 def get_auth_client():
     return WebApplicationClient(CONFIG['GOOGLE_CLIENT_ID'])
@@ -181,12 +141,11 @@ async def register_user(
             response = Text(
                 'Follow ', TextLink('link', url=request_uri), ' to authorize.'
             )
-            DATABASE_CONNECTION.new_user(chat_id=message.chat.id, email=emails_to_register[0], status='unverified')
             # send an email to callbacks_handler to process user registration through RabbitMQ
             PIKA_REGISTER_CHANNEL.basic_publish(
                 exchange='',
                 routing_key='vika_register',
-                body=emails_to_register[0]
+                body=f'{message.chat.id}\t{emails_to_register[0]}'
             )
         else:
             response = Text(
@@ -203,18 +162,33 @@ async def cmd_start(message: types.Message, bot: Bot):
     # или в start_polling в качестве kwargs
     await message.answer(**format_hello_message(message).as_kwargs())
 
-async def main() -> None:
+async def run_tg_poller(publish_channel) -> None:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     async with aiohttp.ClientSession() as session:
+        bot = Bot(
+            default=DefaultBotProperties(
+                parse_mode=ParseMode.HTML
+            ),
+            token=CONFIG['TOKEN'],
+            #session=session
+        )
         await dp.start_polling(
-            TELEGRAM_BOT, polling_timeout=30,
+            bot, polling_timeout=30,
+            handle_signals=False,
             http_session=session,
             auth_client=get_auth_client(),
-            redirect_uri=CALLBACK_URL
+            redirect_uri=CALLBACK_URL,
+            pika_channel=publish_channel
         )
+    return
+
 
 async def message_callback(bot, message, chat_id_to_send):
-    await bot.send_message(chat_id_to_send, message)
-    #await bot.session.close()
+    try:
+        await bot.send_message(chat_id_to_send, message)
+    except:
+        pass
 
 async def run_consumers(bot, chat_id_to_send):
     loop = asyncio.get_event_loop()
@@ -243,8 +217,19 @@ def run_sender():
         token=CONFIG['TOKEN']
     )
     asyncio.run(run_consumers(bot, chat_id_to_send))
-    bot.session.close()
+    try:
+        bot.session.close()
+    except:
+        pass
+    return
 
+def start_bot():
+    connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
+    register_publish_channel = connection.channel()
+    register_publish_channel.queue_declare(queue='vika_register')
+
+    asyncio.run(run_tg_poller(register_publish_channel))
+    return
 
 
 if __name__ == "__main__":
@@ -258,8 +243,12 @@ if __name__ == "__main__":
 #    PIKA_CONSUME_CHANNEL, PIKA_REGISTER_CHANNEL = init_rabbitmq_connection()
 #    PIKA_CONSUMER_THREAD = Thread(target=consume_pika_query, args=(PIKA_CONSUME_CHANNEL, 'vika_notify', pika_user_register_callback))
 #    PIKA_CONSUMER_THREAD.start()
-    thread = Thread(target=run_sender)
-    thread.start()
-    #asyncio.run(main())
-    thread.join()
-#    PIKA_CONSUMER_THREAD.join()
+    threads = [
+        Thread(target=start_bot),
+        Thread(target=run_sender)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+

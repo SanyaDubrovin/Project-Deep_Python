@@ -17,7 +17,7 @@ from aiogram.utils.formatting import as_list, as_marked_section, Text, Bold, Has
 from aiogram.enums import ParseMode
 from aiogram import F
 
-from utils import fetch
+from utils import fetch, encode_message, decode_message
 
 
 EMAIL_REGEX = r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$'
@@ -182,13 +182,18 @@ async def run_tg_poller(publish_channel) -> None:
 async def message_callback(bot, message, chat_id_to_send):
     try:
         await bot.send_message(chat_id_to_send, message)
-    except:
-        pass
+    except Exception as exc:
+        print('Error while sending a message:', exc)
 
 async def run_consumers(bot, chat_id_to_send):
     loop = asyncio.get_event_loop()
     def on_message(ch, method, properties, body):
-        future = asyncio.run_coroutine_threadsafe(message_callback(bot, body.decode(), chat_id_to_send), loop)
+        try:
+            message = decode_message(body)
+        except Exception:
+            print('Error while decoding a message:', exc)
+            return
+        future = asyncio.run_coroutine_threadsafe(message_callback(bot, message['text'], message['chat_id']), loop)
         return future.result()
     
     connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
@@ -212,10 +217,10 @@ def run_tg_msg_sender():
         token=CONFIG['TOKEN']
     )
     asyncio.run(run_consumers(bot, chat_id_to_send))
-    try:
-        bot.session.close()
-    except:
-        pass
+    # try:
+    #     bot.session.close()
+    # except:
+    #     pass
     return
 
 def start_bot():

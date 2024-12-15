@@ -22,7 +22,7 @@ from utils import fetch, encode_message, decode_message
 
 EMAIL_REGEX = r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$'
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.WARN)
 CONFIG = dotenv_values()
 CALLBACK_URL = CONFIG.get('CALLBACK_URL', None)
 SUPPORTED_EMAIL_DOMAINS = {'gmail',}
@@ -233,11 +233,6 @@ def start_bot():
 
 
 if __name__ == "__main__":
-    PIKA_EMAILS_LOCK = Lock()
-    PIKA_EMAILS_REGISTERED = set()
-#    PIKA_CONSUME_CHANNEL, PIKA_REGISTER_CHANNEL = init_rabbitmq_connection()
-#    PIKA_CONSUMER_THREAD = Thread(target=consume_pika_query, args=(PIKA_CONSUME_CHANNEL, 'vika_notify', pika_user_register_callback))
-#    PIKA_CONSUMER_THREAD.start()
     threads = [
         Thread(target=start_bot),
         Thread(target=run_tg_msg_sender)

@@ -4,7 +4,6 @@ import logging
 import json
 import re
 import pika
-import sqlite3
 
 from threading import Thread, Lock
 from enum import Enum
@@ -18,8 +17,7 @@ from aiogram.utils.formatting import as_list, as_marked_section, Text, Bold, Has
 from aiogram.enums import ParseMode
 from aiogram import F
 
-from utils import fetch, consume_pika_query
-from db import get_db
+from utils import fetch
 
 
 EMAIL_REGEX = r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$'
@@ -103,7 +101,8 @@ async def register_user(
         message: types.Message,
         http_session: aiohttp.ClientSession,
         auth_client: WebApplicationClient,
-        redirect_uri: str
+        redirect_uri: str,
+        pika_channel
     ):
     """
     Forms a link to send a link to allow mails processing
@@ -118,10 +117,6 @@ async def register_user(
     elif len(emails_to_register) > 1:
         response = Text(
             'Several email addresses provided to register! Send one using message schema "/register <email>" to authorize.'
-        )
-    elif emails_to_register[0] in USERS_DICT:
-        response = Text(
-            'You have already registered this email!.'
         )
     else:
         new_user_email_domain = get_email_schema(emails_to_register[0])
@@ -142,7 +137,7 @@ async def register_user(
                 'Follow ', TextLink('link', url=request_uri), ' to authorize.'
             )
             # send an email to callbacks_handler to process user registration through RabbitMQ
-            PIKA_REGISTER_CHANNEL.basic_publish(
+            pika_channel.basic_publish(
                 exchange='',
                 routing_key='vika_register',
                 body=f'{message.chat.id}\t{emails_to_register[0]}'
@@ -208,7 +203,7 @@ async def run_consumers(bot, chat_id_to_send):
     finally:
         connection.close()
 
-def run_sender():
+def run_tg_msg_sender():
     chat_id_to_send = 1001182656
     bot = Bot(
         default=DefaultBotProperties(
@@ -233,11 +228,6 @@ def start_bot():
 
 
 if __name__ == "__main__":
-#    try:
-#        DATABASE_CONNECTION = get_db(check_same_thread=False)
-#    except sqlite3.OperationalError:
-#        pass
-#    USERS_DICT = DATABASE_CONNECTION.get_all_users()
     PIKA_EMAILS_LOCK = Lock()
     PIKA_EMAILS_REGISTERED = set()
 #    PIKA_CONSUME_CHANNEL, PIKA_REGISTER_CHANNEL = init_rabbitmq_connection()
@@ -245,10 +235,9 @@ if __name__ == "__main__":
 #    PIKA_CONSUMER_THREAD.start()
     threads = [
         Thread(target=start_bot),
-        Thread(target=run_sender)
+        Thread(target=run_tg_msg_sender)
     ]
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join()
-

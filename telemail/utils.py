@@ -1,4 +1,5 @@
 import aiohttp
+import json
 
 from OpenSSL import crypto
 from socket import gethostname
@@ -42,3 +43,10 @@ def generate_self_signed_cert():
     with open("cert.pem", "wb") as cert_file:
         cert_file.write(crypto.dump_certificate(crypto.FILETYPE_PEM, cert))
 
+def encode_message(python_object):
+    if not isinstance(python_object, str):
+        python_object = json.dumps(python_object)
+    return python_object.encode()
+
+def decode_message(python_object):
+    return json.loads(python_object.decode())

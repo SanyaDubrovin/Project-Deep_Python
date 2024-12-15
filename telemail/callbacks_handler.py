@@ -5,20 +5,23 @@ import uvicorn
 import requests
 import ssl
 import pika
+import asyncio
+import logging
 
 from threading import Lock, Thread
 from dotenv import dotenv_values
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse, HTMLResponse
 from oauthlib.oauth2 import WebApplicationClient
+from pika.adapters.blocking_connection import BlockingChannel
 
 from fastapi import Request
 
-from utils import fetch, consume_pika_query
+from utils import fetch, consume_pika_query, encode_message
 from oauth_utils import get_google_provider_cfg
 
-from db import get_db
 
+logging.basicConfig(level=logging.INFO)
 
 CONFIG = dotenv_values('.env')
 GOOGLE_CLIENT_ID = CONFIG.get('GOOGLE_CLIENT_ID', None)
@@ -31,36 +34,50 @@ app = FastAPI()
 app.secret_key = GOOGLE_CLIENT_SECRET
 
 
-try:
-    DATABASE_CONNECTION = get_db()
-except sqlite3.OperationalError:
-    pass
-
 # OAuth2 client setup
-client = WebApplicationClient(GOOGLE_CLIENT_ID)
 OAUTH_CLIENT = WebApplicationClient(GOOGLE_CLIENT_ID)
 
-PIKA_EMAILS_LOCK = Lock()
-PIKA_EMAILS_TO_REGISTER = set()
-
-def pika_email_register_callback(ch, method, properties, body):
-    with PIKA_EMAILS_LOCK:
-        PIKA_EMAILS_TO_REGISTER.add(body.decode())
+def publish_callback_message_loop(loop):
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
     return
 
-def init_rabbitmq_connection() -> None:
+def get_register_notifications_queue():
     connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
-    consume_channel = connection.channel()
-    consume_channel.queue_declare(queue='vika_register')
+    notifications_channel = connection.channel()
+    notifications_channel.queue_declare(queue='vika_callbacks')
+    return notifications_channel
 
-    send_channel = connection.channel()
-    send_channel.queue_declare(queue='vika_notify')
-    return consume_channel, send_channel
+async def publish_callback_token(
+            token: str,
+            notifications_queue: BlockingChannel=get_register_notifications_queue(),
+            oauth_client=WebApplicationClient(GOOGLE_CLIENT_ID),
+            provider_cfg=get_google_provider_cfg()
+        ):
+    print(type(token), token)
+    token_json = json.dumps(token)
+    print(token_json)
+    oauth_client.parse_request_body_response(token_json)
+    uri, headers, body = oauth_client.add_token(provider_cfg['userinfo_endpoint'])
+    userinfo_response = requests.get(uri, headers=headers, data=body)
+    userinfo_json = userinfo_response.json()
 
-def send_message_to_rabbitmq(channel, queue_name, message) -> None:
-    channel.basic_publish(exchange='', routing_key=queue_name, body=message)
+    message = encode_message(
+        {
+            'google_unique_id': userinfo_json['sub'],
+            'email': userinfo_json['email'],
+            'verified': userinfo_json.get('email_verified', False),
+            'username': userinfo_json["given_name"],
+            'token': token_json
+        }
+    )
+    print(message)
+    notifications_queue.basic_publish(
+        exchange='',
+        routing_key='vika_callbacks',
+        body=message
+    )
     return
-
 
 @app.get("/login/callback")
 async def callback(request: Request, code: str):
@@ -88,50 +105,13 @@ async def callback(request: Request, code: str):
         auth=(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET),
     )
     token_json = token_response.json()
-    
-    OAUTH_CLIENT.parse_request_body_response(json.dumps(token_json))
+    print("User token:", type(token_json), token_json)
 
-    # Get user info from Google using a token
-    userinfo_endpoint = google_provider_cfg["userinfo_endpoint"]
-    uri, headers, body = OAUTH_CLIENT.add_token(userinfo_endpoint)
-    print('uri with token:', uri)
-    userinfo_response = requests.get(uri, headers=headers, data=body)
-    userinfo_json = userinfo_response.json()
-    print('userinfo json:', userinfo_json)
+    asyncio.run_coroutine_threadsafe(publish_callback_token(token_json), app.state.publish_loop)
 
-    # check email verification
-    if userinfo_json.get("email_verified"):
-        unique_id = userinfo_json["sub"]
-        users_email = userinfo_json["email"]
-        users_name = userinfo_json["given_name"]
-    else:
-        raise HTTPException(status_code=400, detail="User email not available or not verified by Google.")
-
-    PIKA_NOTIFY_CHANNEL.basic_publish(
-                exchange='',
-                routing_key='vika_notify',
-                body=f'{users_email}\tUser {users_name} is registered!'
-            )
-    DATABASE_CONNECTION.update_user_info_by_email(
-        userinfo_json['email'],
-        username=users_name,
-        status='verified',
-    )
-
-    # Begin user session by logging the user in
-    print(PIKA_EMAILS_TO_REGISTER)
-    if userinfo_json['email'] in PIKA_EMAILS_TO_REGISTER:
-        print('User registered!')
-    else:
-        print('Unknown user!')
     # redirect to a bot
     response = RedirectResponse(url=BOT_LINK)
     return response
 
-
 if __name__ == "__main__":
-    PIKA_CONSUME_CHANNEL, PIKA_NOTIFY_CHANNEL = init_rabbitmq_connection()
-    PIKA_CONSUMER_THREAD = Thread(target=consume_pika_query, args=(PIKA_CONSUME_CHANNEL, 'vika_register', pika_email_register_callback))
-    PIKA_CONSUMER_THREAD.start()
     uvicorn.run(app, host='0.0.0.0', port=5000, ssl_keyfile='key.pem', ssl_certfile='cert.pem')
-    PIKA_CONSUMER_THREAD.join()

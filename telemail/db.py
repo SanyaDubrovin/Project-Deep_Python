@@ -1,81 +1,120 @@
-import sqlite3
-
-from typing import Optional
+import psycopg2
 
 
-USERS_DB_NAME = 'db.sqlite'
+class TelemailDB(object):
+    def __init__(
+            self,
+            database: str,
+            user: str,
+            password: str,
+            host: str,
+            port: int
+        ):
+        self.database = database
+        self.user = user
+        self.password = password
+        self.host = host
+        self.port = port
+        self.connection = None
 
-class TelegramUsers(object):
-    def __init__(self, db_path: str, **kwargs):
-        self.conn = sqlite3.connect(db_path, **kwargs)
-        self.create_user_table()
+    def connect(self):
+        self.connection = psycopg2.connect(
+            host=self.host,
+            port=self.port,
+            user=self.user,
+            password=self.password,
+            database=self.database
+        )
 
-    def create_user_table(self):
-        with self.conn:
-            self.conn.execute('''
-                CREATE TABLE IF NOT EXISTS users (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username TEXT,
-                    email TEXT UNIQUE,
-                    chat_id TEXT,
-                    status TEXT
+    def initialise_tables(self):
+        if self.connection is None:
+            raise TypeError('Connect to database before initialising tables!')
+        with self.connection.cursor() as cursor:
+            cursor.execute("""
+                CREATE TEMPORARY TABLE IF NOT EXISTS telemail_tg_register_start (
+                    chat_id VARCHAR(32), email VARCHAR(128)
                 )
-            ''')
+            """)
+            # token_type # str (value: 'Bearer')
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS telemail_users (
+                    chat_id VARCHAR(32) NOT NULL,
+                    google_unique_id VARCHAR(32),
+                    email VARCHAR(128) NOT NULL,
+                    username VARCHAR(128),
+                    verified BOOLEAN,
+                    id_token VARCHAR(2048),
+                    access_token VARCHAR(256),
+                    token_type VARCHAR(16),
+                    scope VARCHAR(256),
+                    expires_in INT,
+                    token_register_datetime DATETIME
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX email_index ON telemail_users USING btree (email);
+            """)
 
-    def new_user(self, username: str='', email: str='', chat_id: str='', status: str = 'unverified'):
-        try:
-            with self.conn:
-                self.conn.execute('''
-                    INSERT INTO users (username, email, chat_id, status) VALUES (?, ?, ?, ?)
-                ''', (username, email, chat_id, status))
-            return True
-        except sqlite3.IntegrityError:
-            return False
+    def insert_tg_user_temp(self, chat_id: str, email: str):
+        with self.connection.cursor() as cursor:
+            cursor.execute("""
+                    INSERT INTO telemail_tg_register_start (chat_id, email) VALUES (%s, %s)
+                """,
+                (chat_id, email)
+            )
 
-    def update_user_info_by_email(
-                self, email: str,
-                username: Optional[str]=None,
-                chat_id: Optional[str]=None,
-                status: Optional[str]=None
+    def get_temp_users(self):
+        with self.connection.cursor() as cursor:
+            cursor.execute('SELECT * FROM telemail_tg_register_start')
+            return cursor.fetchall()
+
+    def insert_new_user(
+                self,
+                chat_id,
+                google_unique_id,
+                email,
+                username,
+                verified,
+                id_token,
+                access_token,
+                token_type,
+                scope,
+                expires_in,
+                token_register_datetime
             ):
-        fields_to_update = {
-            'username': username,
-            'chat_id': chat_id,
-            'status': status
-        }
-        updating_field_names = {key:fields_to_update[key] for key in fields_to_update if fields_to_update[key] is not None}
-        if len(updating_field_names) == 0:
-            return True
-        set_rows = []
-        values_to_update = []
-        for key in updating_field_names:
-            set_rows.append(f'{key} = ?')
-            values_to_update.append(updating_field_names[key])
-        values_to_update.append(email)
-        try:
-            with self.conn:
-                self.conn.execute(
-                    f'''
-                        UPDATE users SET {', '.join(set_rows)} WHERE email = ?
-                    ''', values_to_update)
-            return True
-        except sqlite3.IntegrityError:
-            pass
-        return False
+        with self.connection.cursor() as cursor:
+            cursor.execute("""
+                    INSERT INTO telemail_users (
+                        chat_id,
+                        google_unique_id,
+                        email,
+                        username,
+                        verified,
+                        id_token,
+                        access_token,
+                        token_type,
+                        scope,
+                        expires_in,
+                        token_register_datetime
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    chat_id,
+                    google_unique_id,
+                    email,
+                    username,
+                    verified,
+                    id_token,
+                    access_token,
+                    token_type,
+                    scope,
+                    expires_in,
+                    token_register_datetime
+                )
+            )
+        return
 
-    def get_all_users(self, dict_view=True):
-        with self.conn:
-            users = self.conn.execute('SELECT * FROM users').fetchall()
-        if dict_view:
-            users = {user[2]: {'id':user[0], 'username': user[1], 'chat_id': user[3], 'status': user[4]} for user in users}
-        return users
-
-    def get_user_by_email(self, email, dict_view=True):
-        with self.conn:
-            user = self.conn.execute(f'SELECT * FROM users WHERE email = \'{email}\'').fetchall()
-        if dict_view:
-            user = {user[0][2]: {'id':user[0][0], 'username': user[0][1], 'chat_id': user[0][3], 'status': user[0][4]}}
-        return user
-
-def get_db(db_name: str=USERS_DB_NAME, **kwargs):
-    return TelegramUsers(db_name, **kwargs)
+    def get_registered_users(self):
+        with self.connection.cursor() as cursor:
+            cursor.execute('SELECT * FROM telemail_users')
+            return cursor.fetchall()

@@ -1,33 +1,33 @@
+import asyncio
+import datetime
 import json
+import logging
 import os
 import sqlite3
-import uvicorn
-import requests
 import ssl
-import pika
-import asyncio
-import logging
-
 from threading import Lock, Thread
+
 from dotenv import dotenv_values
-from fastapi import FastAPI, Depends, HTTPException, status
-from fastapi.responses import RedirectResponse, HTMLResponse
-from oauthlib.oauth2 import WebApplicationClient
-from pika.adapters.blocking_connection import BlockingChannel
-
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi import Request
+from fastapi.responses import HTMLResponse, RedirectResponse
+from oauthlib.oauth2 import WebApplicationClient
+import pika
+from pika.adapters.blocking_connection import BlockingChannel
+import requests
+import uvicorn
 
-from utils import fetch, consume_pika_query, encode_message
 from oauth_utils import get_google_provider_cfg
+from utils import consume_pika_query, encode_message, fetch
 
 
 logging.basicConfig(level=logging.INFO)
 
 CONFIG = dotenv_values('.env')
-GOOGLE_CLIENT_ID = CONFIG.get('GOOGLE_CLIENT_ID', None)
+GOOGLE_CLIENT_ID = CONFIG.get('GOOGLE_CLIENT_ID')
 GOOGLE_CLIENT_SECRET = CONFIG.get('GOOGLE_CLIENT_SECRET', os.urandom(24))
-GOOGLE_DISCOVERY_URL = CONFIG.get('GOOGLE_DISCOVERY_URL', None)
-BOT_LINK = CONFIG.get('BOT_LINK', None)
+GOOGLE_DISCOVERY_URL = CONFIG.get('GOOGLE_DISCOVERY_URL')
+BOT_LINK = CONFIG.get('BOT_LINK')
 
 # FastAPI app setup
 app = FastAPI()
@@ -49,29 +49,26 @@ def get_register_notifications_queue():
     return notifications_channel
 
 async def publish_callback_token(
-            token: str,
+            token: dict,
             notifications_queue: BlockingChannel=get_register_notifications_queue(),
             oauth_client=WebApplicationClient(GOOGLE_CLIENT_ID),
             provider_cfg=get_google_provider_cfg()
         ):
-    print(type(token), token)
     token_json = json.dumps(token)
-    print(token_json)
     oauth_client.parse_request_body_response(token_json)
     uri, headers, body = oauth_client.add_token(provider_cfg['userinfo_endpoint'])
     userinfo_response = requests.get(uri, headers=headers, data=body)
     userinfo_json = userinfo_response.json()
 
-    message = encode_message(
-        {
-            'google_unique_id': userinfo_json['sub'],
-            'email': userinfo_json['email'],
-            'verified': userinfo_json.get('email_verified', False),
-            'username': userinfo_json["given_name"],
-            'token': token_json
-        }
-    )
-    print(message)
+    message = {
+        'google_unique_id': userinfo_json['sub'],
+        'email': userinfo_json['email'],
+        'verified': userinfo_json.get('email_verified', False),
+        'username': userinfo_json['name'],
+        'register_datetime': datetime.datetime.now().isoformat()
+    }
+    message.update(token)
+    message = encode_message(message)
     notifications_queue.basic_publish(
         exchange='',
         routing_key='vika_callbacks',
@@ -90,7 +87,7 @@ async def callback(request: Request, code: str):
 
     # Get authorization code Google sent back to you
     google_provider_cfg = get_google_provider_cfg()
-    token_endpoint = google_provider_cfg["token_endpoint"]
+    token_endpoint = google_provider_cfg['token_endpoint']
     token_url, headers, body = OAUTH_CLIENT.prepare_token_request(
         token_endpoint,
         authorization_response=str(request.url),

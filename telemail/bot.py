@@ -1,23 +1,29 @@
 import asyncio
-import aiohttp
-import logging
-import json
-import re
-import pika
-
-from threading import Thread, Lock
 from enum import Enum
+import json
+import logging
+import re
+from threading import Lock, Thread
+
+from aiogram import Bot, Dispatcher, html, types
+from aiogram import F
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+from aiogram.filters.command import Command
+from aiogram.utils.formatting import (
+    Bold,
+    HashTag,
+    Text,
+    TextLink,
+    as_list,
+    as_marked_section,
+)
+import aiohttp
 from dotenv import dotenv_values
 from oauthlib.oauth2 import WebApplicationClient
+import pika
 
-from aiogram import Bot, Dispatcher, types, html
-from aiogram.filters.command import Command
-from aiogram.client.default import DefaultBotProperties
-from aiogram.utils.formatting import as_list, as_marked_section, Text, Bold, HashTag, TextLink
-from aiogram.enums import ParseMode
-from aiogram import F
-
-from utils import fetch, encode_message, decode_message
+from utils import decode_message, encode_message, fetch
 
 
 EMAIL_REGEX = r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$'
@@ -137,10 +143,16 @@ async def register_user(
                 'Follow ', TextLink('link', url=request_uri), ' to authorize.'
             )
             # send an email to callbacks_handler to process user registration through RabbitMQ
+            register_message = {
+                'type': 'tg_temp',
+                'email': emails_to_register[0],
+                'chat_id': message.chat.id
+            }
+            register_message = encode_message(register_message)
             pika_channel.basic_publish(
                 exchange='',
                 routing_key='vika_register',
-                body=f'{message.chat.id}\t{emails_to_register[0]}'
+                body=register_message
             )
         else:
             response = Text(

@@ -1,15 +1,50 @@
 import uvicorn
 import asyncio
+import pika
 
 from multiprocessing import Process
 from threading import Thread, Lock
 
 from bot import start_bot, run_tg_msg_sender
+from utils import decode_message, encode_message
 from callbacks_handler import app, publish_callback_message_loop
 
 
 UPDATE_EMAILS_FLAG_LOCK = Lock()
 UPDATE_EMAILS_FLAG = 0
+
+def register_new_user(ch, method, properties, body):
+    pass
+
+def run_messages_consumer():
+    connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
+    consume_channel = connection.channel()
+    consume_channel.queue_declare(queue='vika_register')
+    consume_channel.queue_declare(queue='vika_callbacks')
+    consume_channel.basic_consume(
+        queue='vika_register',
+        on_message_callback=register_new_user,
+        auto_ack=True
+    )
+    consume_channel.basic_consume(
+        queue='vika_callbacks',
+        on_message_callback=register_new_user,
+        auto_ack=True
+    )
+    consume_channel.start_consuming()
+    return
+
+def run_app():
+    threads = [
+        Thread(),
+        Thread()
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    return
+
 
 def run_bot_process():
     threads = [

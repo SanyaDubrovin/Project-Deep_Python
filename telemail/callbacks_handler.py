@@ -65,7 +65,7 @@ async def publish_callback_token(
         'email': userinfo_json['email'],
         'verified': userinfo_json.get('email_verified', False),
         'username': userinfo_json['name'],
-        'register_datetime': datetime.datetime.now().isoformat()
+        'token_register_datetime': datetime.datetime.now().isoformat()
     }
     message.update(token)
     message = encode_message(message)

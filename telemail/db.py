@@ -1,23 +1,17 @@
 import psycopg2
 
+from typing import Optional
 from dotenv import dotenv_values
 
 
-def get_db(
-        database: str,
-        user: str,
-        password: str,
-        host: str,
-        port: int,
-        init_tables=True
-    ):
+def get_db():
     config = dotenv_values('.env')
     return TelemailDB(
         database=config['DATABASE_NAME'],
         user=config['DATABASE_USERNAME'],
-        password=config['DATABASE_USER_PASSWORD'],
-        host=config['DATABASE_HOST'],
-        port=config['DATABASE_PORT'],
+        #password=config['DATABASE_USER_PASSWORD'],
+        #host=config['DATABASE_HOST'],
+        #port=config['DATABASE_PORT'],
         init_tables=True
     )
 
@@ -26,28 +20,30 @@ class TelemailDB(object):
             self,
             database: str,
             user: str,
-            password: str,
-            host: str,
-            port: int,
+            password: Optional[str]=None,
+            host: Optional[str]=None,
+            port: Optional[int]=None,
             init_tables=True
         ):
-        self.database = database
-        self.user = user
-        self.password = password
-        self.host = host
-        self.port = port
+        self.connection_params = {
+            'database': database,
+            'user': user,
+            'password': password,
+            'host': host,
+            'port': port
+        }
         self.connection = self.connect()
         if init_tables:
             self.initialise_tables()
 
     def connect(self):
-        return psycopg2.connect(
-            host=self.host,
-            port=self.port,
-            user=self.user,
-            password=self.password,
-            database=self.database
-        )
+        connection_params = {
+            key: self.connection_params[key] for key in self.connection_params if self.connection_params[key] is not None
+        }
+        try:
+            return psycopg2.connect(**connection_params)
+        except psycopg2.OperationalError:
+            raise Exception('Error while getting a connection object to postgresql!')
 
     def initialise_tables(self):
         if self.connection is None:
@@ -69,7 +65,7 @@ class TelemailDB(object):
                     token_type VARCHAR(16),
                     scope VARCHAR(256),
                     expires_in INT,
-                    token_register_datetime DATETIME
+                    token_register_datetime TIMESTAMP
                 )
             """)
             # token_type # str (value: 'Bearer')
@@ -86,7 +82,7 @@ class TelemailDB(object):
                     token_type VARCHAR(16),
                     scope VARCHAR(256),
                     expires_in INT,
-                    token_register_datetime DATETIME
+                    token_register_datetime TIMESTAMP
                 )
             """)
             cursor.execute("""
@@ -143,15 +139,23 @@ class TelemailDB(object):
                 )
             )
 
-    def get_tg_temp_users(self):
+    def get_tg_temp_users(self, to_dict=True):
         with self.connection.cursor() as cursor:
             cursor.execute('SELECT * FROM telemail_tg_register_temp')
-            return cursor.fetchall()
+            columns = cursor.description
+            rows = cursor.fetchall()
+            if to_dict:
+                return {column: [row[column_num] for row in rows] for column_num, column in columns}
+            return rows
     
-    def get_google_temp_users(self):
+    def get_google_temp_users(self, to_dict):
         with self.connection.cursor() as cursor:
             cursor.execute('SELECT * FROM google_user_info_temp')
-            return cursor.fetchall()
+            columns = cursor.description
+            rows = cursor.fetchall()
+            if to_dict:
+                return {column: [row[column_num] for row in rows] for column_num, column in columns}
+            return rows
 
     def insert_new_user(
                 self,
@@ -201,7 +205,11 @@ class TelemailDB(object):
             )
         return
 
-    def get_registered_users(self):
+    def get_registered_users(self, to_dict=True):
         with self.connection.cursor() as cursor:
             cursor.execute('SELECT * FROM telemail_users')
-            return cursor.fetchall()
+            columns = cursor.description
+            rows = cursor.fetchall()
+            if to_dict:
+                return {column: [row[column_num] for row in rows] for column_num, column in columns}
+            return rows

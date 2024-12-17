@@ -8,13 +8,46 @@ from threading import Thread, Lock
 from bot import start_bot, run_tg_msg_sender
 from utils import decode_message, encode_message
 from callbacks_handler import app, publish_callback_message_loop
+from db import get_db
 
 
-UPDATE_EMAILS_FLAG_LOCK = Lock()
-UPDATE_EMAILS_FLAG = 0
+UPDATED_TEMP_TABLES_FLAG_LOCK = Lock()
+UPDATED_TEMP_TABLES_FLAG = 0
+RUN_REGISTER_FLAG = 0
 
-def register_new_user(ch, method, properties, body):
-    pass
+def google_user_info_callback(
+        ch, method, properties, body,
+        db_conn=get_db()
+    ):
+    message = decode_message(body)
+    db_conn.insert_google_user_temp(
+        google_unique_id=message['google_unique_id'],
+        email=message['email'],
+        username=message['username'],
+        verified=message['verified'],
+        id_token=message['id_token'],
+        access_token=message['access_token'],
+        token_type=message['token_type'],
+        scope=message['scope'],
+        expires_in=message['expires_in'],
+        token_register_datetime=message['token_register_datetime']
+    )
+    with UPDATED_TEMP_TABLES_FLAG_LOCK:
+        UPDATED_TEMP_TABLES_FLAG = 1
+    return
+
+def tg_user_info_callback(
+        ch, method, properties, body,
+        db_conn=get_db()
+    ):
+    message = decode_message(body)
+    db_conn.insert_tg_user_temp(
+        chat_id=message['chat_id'],
+        email=message['email']
+    )
+    with UPDATED_TEMP_TABLES_FLAG_LOCK:
+        UPDATED_TEMP_TABLES_FLAG = 1
+    return
 
 def run_messages_consumer():
     connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
@@ -23,20 +56,24 @@ def run_messages_consumer():
     consume_channel.queue_declare(queue='vika_callbacks')
     consume_channel.basic_consume(
         queue='vika_register',
-        on_message_callback=register_new_user,
+        on_message_callback=tg_user_info_callback,
         auto_ack=True
     )
     consume_channel.basic_consume(
         queue='vika_callbacks',
-        on_message_callback=register_new_user,
+        on_message_callback=google_user_info_callback,
         auto_ack=True
     )
     consume_channel.start_consuming()
     return
 
+def mail_loop():
+    while True:
+        pass
+
 def run_app():
     threads = [
-        Thread(),
+        Thread(target=run_messages_consumer),
         Thread()
     ]
     for thread in threads:

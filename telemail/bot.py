@@ -28,7 +28,7 @@ from utils import decode_message, encode_message, fetch
 
 EMAIL_REGEX = r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$'
 
-logging.basicConfig(level=logging.WARN)
+logging.basicConfig(level=logging.INFO)
 CONFIG = dotenv_values()
 CALLBACK_URL = CONFIG.get('CALLBACK_URL', None)
 SUPPORTED_EMAIL_DOMAINS = {'gmail',}
@@ -136,7 +136,8 @@ async def register_user(
                 scope=[
                     'openid', 'profile', 'email',
                     'https://www.googleapis.com/auth/gmail.readonly',
-                    'https://www.googleapis.com/auth/gmail.metadata'
+                    # Не использовать! Не даёт получать полные сообщения
+                    # 'https://www.googleapis.com/auth/gmail.metadata'
                 ]
             )
             response = Text(
